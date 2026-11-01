@@ -503,6 +503,10 @@ func (r *JobReconciler) ReconcileGenericJob(ctx context.Context, req ctrl.Reques
 	}
 
 	if wl != nil && workloadfinish.IsFinished(wl) {
+		if err := r.recordFinishedAt(ctx, object, wl); err != nil {
+			return ctrl.Result{}, err
+		}
+
 		if err := r.finalizeJob(ctx, job); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -559,6 +563,14 @@ func (r *JobReconciler) ReconcileGenericJob(ctx context.Context, req ctrl.Reques
 		}
 
 		// Execute job finalization logic
+		// Record the Workload finish time before finalizing the owner.
+		if wl != nil {
+			if err := r.recordFinishedAt(ctx, object, wl); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+
+		// Execute job finalization logic.
 		if err := r.finalizeJob(ctx, job); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -1939,6 +1951,58 @@ func (r *JobReconciler) stopJob(ctx context.Context, job GenericJob, wl *kueue.W
 
 	r.record.Eventf(object, nil, corev1.EventTypeNormal, ReasonStopped, "Stopped", api.TruncateEventMessage(eventMsg))
 	return nil
+}
+
+func (r *JobReconciler) recordFinishedAt(
+	ctx context.Context,
+	object client.Object,
+	wl *kueue.Workload,
+) error {
+	if !object.GetDeletionTimestamp().IsZero() {
+		return nil
+	}
+
+	if _, exists := object.GetAnnotations()[controllerconsts.WorkloadFinishedAtAnnotation]; exists {
+		return nil
+	}
+
+	cond := apimeta.FindStatusCondition(
+		wl.Status.Conditions,
+		kueue.WorkloadFinished,
+	)
+
+	if cond == nil {
+		// No finish timestamp is available to record.
+		return nil
+	}
+
+	if cond.Reason != kueue.WorkloadFinishedReasonSucceeded &&
+		cond.Reason != kueue.WorkloadFinishedReasonFailed {
+		return nil
+	}
+
+	err := clientutil.Patch(ctx, r.client, object, func() (bool, error) {
+		if !object.GetDeletionTimestamp().IsZero() {
+			return false, nil
+		}
+
+		annotations := object.GetAnnotations()
+		if _, exists := annotations[controllerconsts.WorkloadFinishedAtAnnotation]; exists {
+			return false, nil
+		}
+
+		if annotations == nil {
+			annotations = make(map[string]string)
+		}
+		annotations[controllerconsts.WorkloadFinishedAtAnnotation] =
+			cond.LastTransitionTime.Format(time.RFC3339)
+		object.SetAnnotations(annotations)
+
+		return true, nil
+	}, clientutil.WithRetryOnConflict())
+
+	fmt.Printf("AFTER %v err=%v\n", object.GetAnnotations(), err)
+	return err
 }
 
 func (r *JobReconciler) finalizeJob(ctx context.Context, job GenericJob) error {

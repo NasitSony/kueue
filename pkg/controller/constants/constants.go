@@ -69,6 +69,10 @@ const (
 	// JobOwnerNameAnnotation is the annotation key in the workload that holds the name of the owner job.
 	JobOwnerNameAnnotation = "kueue.x-k8s.io/job-owner-name"
 
+	// WorkloadFinishedAtAnnotation records when the owner's Workload finished,
+	// so owner retention can be evaluated after the Workload itself is deleted.
+	WorkloadFinishedAtAnnotation = "kueue.x-k8s.io/workload-finished-at"
+
 	// ComponentWorkloadIndexAnnotation stores the numeric index for component workloads
 	// in multi-workload jobs (e.g., LeaderWorkerSet replicas).
 	ComponentWorkloadIndexAnnotation = "kueue.x-k8s.io/component-workload-index"

@@ -21,15 +21,21 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/component-base/featuregate"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta2"
 	"sigs.k8s.io/kueue/pkg/constants"
+	controllerconsts "sigs.k8s.io/kueue/pkg/controller/constants"
 	"sigs.k8s.io/kueue/pkg/features"
 	"sigs.k8s.io/kueue/pkg/podset"
 	utiltesting "sigs.k8s.io/kueue/pkg/util/testing"
 	utiltestingapi "sigs.k8s.io/kueue/pkg/util/testing/v1beta2"
+	testingjob "sigs.k8s.io/kueue/pkg/util/testingjobs/job"
 	"sigs.k8s.io/kueue/pkg/workloadslicing"
 )
 
@@ -201,6 +207,72 @@ func TestClearUnusableMinCounts(t *testing.T) {
 				if cleared := ps.MinCount == nil; cleared != tc.wantMinCountsCleared {
 					t.Errorf("podSet %q: minCount cleared = %v, want %v", ps.Name, cleared, tc.wantMinCountsCleared)
 				}
+			}
+		})
+	}
+}
+func TestRecordFinishedAt(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	earlier := now.Add(-time.Hour)
+
+	cases := map[string]struct {
+		jobAnnotations map[string]string
+		finishedReason string
+		wantAnnotation string
+	}{
+		"stamps when the workload finished with Succeeded": {
+			finishedReason: kueue.WorkloadFinishedReasonSucceeded,
+			wantAnnotation: now.Format(time.RFC3339),
+		},
+		"stamps when the workload finished with Failed": {
+			finishedReason: kueue.WorkloadFinishedReasonFailed,
+			wantAnnotation: now.Format(time.RFC3339),
+		},
+		"does not stamp when the workload was a replaced slice": {
+			finishedReason: kueue.WorkloadSliceReplaced,
+			wantAnnotation: "",
+		},
+		"does not overwrite an existing stamp": {
+			jobAnnotations: map[string]string{
+				controllerconsts.WorkloadFinishedAtAnnotation: earlier.Format(time.RFC3339),
+			},
+			finishedReason: kueue.WorkloadFinishedReasonSucceeded,
+			wantAnnotation: earlier.Format(time.RFC3339),
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			ctx, _ := utiltesting.ContextWithLog(t)
+
+			job := testingjob.MakeJob("test-job", "default").UID("test-job").Obj()
+			job.Annotations = tc.jobAnnotations
+
+			wl := utiltestingapi.MakeWorkload("wl", "default").Obj()
+			apimeta.SetStatusCondition(&wl.Status.Conditions, metav1.Condition{
+				Type:               kueue.WorkloadFinished,
+				Status:             metav1.ConditionTrue,
+				Reason:             tc.finishedReason,
+				Message:            "test",
+				LastTransitionTime: metav1.NewTime(now),
+			})
+
+			cl := utiltesting.NewClientBuilder(batchv1.AddToScheme, kueue.AddToScheme).
+				WithObjects(utiltesting.MakeNamespace("default")).
+				WithObjects(job, wl).
+				Build()
+
+			reconciler := NewReconciler(cl, &utiltesting.EventRecorder{})
+
+			if err := reconciler.recordFinishedAt(ctx, job, wl); err != nil {
+				t.Fatalf("recordFinishedAt: %v", err)
+			}
+
+			got := &batchv1.Job{}
+			if err := cl.Get(ctx, client.ObjectKeyFromObject(job), got); err != nil {
+				t.Fatalf("getting job: %v", err)
+			}
+			if gotAnnotation := got.Annotations[controllerconsts.WorkloadFinishedAtAnnotation]; gotAnnotation != tc.wantAnnotation {
+				t.Errorf("annotation = %q, want %q", gotAnnotation, tc.wantAnnotation)
 			}
 		})
 	}
