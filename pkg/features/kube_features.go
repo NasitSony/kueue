@@ -658,6 +658,15 @@ const (
 	// with ResourceClaims is not admitted when no node can satisfy them.
 	KueueDRADeviceFeasibility featuregate.Feature = "KueueDRADeviceFeasibility"
 
+	// owner: @NasitSony
+	// kep: https://github.com/kubernetes-sigs/kueue/tree/main/keps/14672-job-owner-retention
+	// issue: https://github.com/kubernetes-sigs/kueue/issues/14672
+	//
+	// Enable deletion of a finished Job owner after objectRetentionPolicies.jobs.afterFinished
+	// has elapsed. Deleting an owner is user-visible and can cascade to its dependent
+	// objects, so this is gated separately from ObjectRetentionPolicies.
+	JobOwnerRetentionPolicy featuregate.Feature = "JobOwnerRetentionPolicy"
+
 	// owner: @sohankunkerkar
 	// kep: https://github.com/kubernetes-sigs/kueue/tree/main/keps/2941-DRA
 	// issue: https://github.com/kubernetes-sigs/kueue/issues/16112
@@ -1326,6 +1335,10 @@ var defaultVersionedFeatureGates = map[featuregate.Feature]featuregate.Versioned
 
 	KueueDRADeviceFeasibility: {
 		{Version: version.MustParse("0.20"), Default: false, PreRelease: featuregate.Alpha},
+	},
+
+	JobOwnerRetentionPolicy: {
+		{Version: version.MustParse("0.21"), Default: false, PreRelease: featuregate.Alpha},
 	},
 
 	KueueDRAIntegrationDeviceTaints: {

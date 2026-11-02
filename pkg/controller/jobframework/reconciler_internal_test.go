@@ -297,11 +297,13 @@ func TestHandleOwnerAfterFinishedPolicy(t *testing.T) {
 		retention      *configapi.ObjectRetentionPolicies
 		wantDeleted    bool
 		wantRequeue    time.Duration
+		gateEnabled    bool
 	}{
 		"deletes the owner once the retention period has elapsed": {
 			jobAnnotations: stamp,
 			retention:      oneHour,
 			wantDeleted:    true,
+			gateEnabled:    true,
 		},
 		"requeues while the retention period has not elapsed": {
 			jobAnnotations: map[string]string{
@@ -309,17 +311,29 @@ func TestHandleOwnerAfterFinishedPolicy(t *testing.T) {
 			},
 			retention:   oneHour,
 			wantRequeue: 30 * time.Minute,
+			gateEnabled: true,
 		},
 		"does nothing when the owner carries no stamp": {
-			retention: oneHour,
+			retention:   oneHour,
+			gateEnabled: true,
 		},
 		"does nothing when retention is unset": {
 			jobAnnotations: stamp,
+			gateEnabled:    true,
+		},
+		"does nothing when the feature gate is disabled": {
+			jobAnnotations: stamp,
+			retention:      oneHour,
+			gateEnabled:    false,
 		},
 	}
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
+			features.SetFeatureGatesDuringTest(t, map[featuregate.Feature]bool{
+				features.JobOwnerRetentionPolicy: tc.gateEnabled,
+			})
+
 			ctx, _ := utiltesting.ContextWithLog(t)
 
 			job := testingjob.MakeJob("test-job", "default").UID("test-job").Obj()

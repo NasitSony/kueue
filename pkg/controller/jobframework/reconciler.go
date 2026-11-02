@@ -946,6 +946,9 @@ func (r *JobReconciler) handleWorkloadAfterDeactivatedPolicy(ctx context.Context
 }
 
 func (r *JobReconciler) shouldHandleDeletionOfFinishedOwner(object client.Object) bool {
+	if !features.Enabled(features.JobOwnerRetentionPolicy) {
+		return false
+	}
 	if r.jobRetentionPolicy.AfterFinished == nil {
 		return false
 	}
