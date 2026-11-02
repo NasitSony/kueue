@@ -23,11 +23,14 @@ import (
 	"github.com/google/go-cmp/cmp"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/component-base/featuregate"
+	testingclock "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	configapi "sigs.k8s.io/kueue/apis/config/v1beta2"
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta2"
 	"sigs.k8s.io/kueue/pkg/constants"
 	controllerconsts "sigs.k8s.io/kueue/pkg/controller/constants"
@@ -273,6 +276,77 @@ func TestRecordFinishedAt(t *testing.T) {
 			}
 			if gotAnnotation := got.Annotations[controllerconsts.WorkloadFinishedAtAnnotation]; gotAnnotation != tc.wantAnnotation {
 				t.Errorf("annotation = %q, want %q", gotAnnotation, tc.wantAnnotation)
+			}
+		})
+	}
+}
+func TestHandleOwnerAfterFinishedPolicy(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	finishedAt := now.Add(-2 * time.Hour)
+	oneHour := &configapi.ObjectRetentionPolicies{
+		Jobs: &configapi.JobRetentionPolicy{
+			AfterFinished: &metav1.Duration{Duration: time.Hour},
+		},
+	}
+	stamp := map[string]string{
+		controllerconsts.WorkloadFinishedAtAnnotation: finishedAt.Format(time.RFC3339),
+	}
+
+	cases := map[string]struct {
+		jobAnnotations map[string]string
+		retention      *configapi.ObjectRetentionPolicies
+		wantDeleted    bool
+		wantRequeue    time.Duration
+	}{
+		"deletes the owner once the retention period has elapsed": {
+			jobAnnotations: stamp,
+			retention:      oneHour,
+			wantDeleted:    true,
+		},
+		"requeues while the retention period has not elapsed": {
+			jobAnnotations: map[string]string{
+				controllerconsts.WorkloadFinishedAtAnnotation: now.Add(-30 * time.Minute).Format(time.RFC3339),
+			},
+			retention:   oneHour,
+			wantRequeue: 30 * time.Minute,
+		},
+		"does nothing when the owner carries no stamp": {
+			retention: oneHour,
+		},
+		"does nothing when retention is unset": {
+			jobAnnotations: stamp,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			ctx, _ := utiltesting.ContextWithLog(t)
+
+			job := testingjob.MakeJob("test-job", "default").UID("test-job").Obj()
+			job.Annotations = tc.jobAnnotations
+
+			cl := utiltesting.NewClientBuilder(batchv1.AddToScheme, kueue.AddToScheme).
+				WithObjects(utiltesting.MakeNamespace("default")).
+				WithObjects(job).
+				Build()
+
+			reconciler := NewReconciler(cl, &utiltesting.EventRecorder{},
+				WithObjectRetentionPolicies(tc.retention),
+				WithClock(testingclock.NewFakeClock(now)),
+			)
+
+			gotRequeue, err := reconciler.handleOwnerAfterFinishedPolicy(ctx, job)
+			if err != nil {
+				t.Fatalf("handleOwnerAfterFinishedPolicy: %v", err)
+			}
+
+			got := &batchv1.Job{}
+			getErr := cl.Get(ctx, client.ObjectKeyFromObject(job), got)
+			if gotDeleted := apierrors.IsNotFound(getErr); gotDeleted != tc.wantDeleted {
+				t.Errorf("deleted = %v, want %v", gotDeleted, tc.wantDeleted)
+			}
+			if gotRequeue != tc.wantRequeue {
+				t.Errorf("requeueAfter = %v, want %v", gotRequeue, tc.wantRequeue)
 			}
 		})
 	}

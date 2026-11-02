@@ -96,6 +96,10 @@ type WorkloadRetentionPolicy struct {
 	AfterDeactivatedByKueue *time.Duration
 }
 
+type JobRetentionPolicy struct {
+	AfterFinished *time.Duration
+}
+
 // JobReconciler reconciles a GenericJob object
 type JobReconciler struct {
 	workloadSlices               *workloadslicing.Manager
@@ -111,6 +115,7 @@ type JobReconciler struct {
 	annotationsToCopy            sets.Set[string]
 	clock                        clock.Clock
 	workloadRetentionPolicy      WorkloadRetentionPolicy
+	jobRetentionPolicy           JobRetentionPolicy
 	roleTracker                  *roletracker.RoleTracker
 	customLabels                 *metrics.CustomLabels
 }
@@ -145,6 +150,7 @@ type Options struct {
 	Cache                        *schdcache.Cache
 	Clock                        clock.Clock
 	WorkloadRetentionPolicy      WorkloadRetentionPolicy
+	JobRetentionPolicy           JobRetentionPolicy
 	RoleTracker                  *roletracker.RoleTracker
 	CustomLabels                 *metrics.CustomLabels
 	IntegrationManager           *IntegrationManager
@@ -292,6 +298,9 @@ func WithObjectRetentionPolicies(value *configapi.ObjectRetentionPolicies) Optio
 		if value != nil && value.Workloads != nil && value.Workloads.AfterDeactivatedByKueue != nil {
 			o.WorkloadRetentionPolicy.AfterDeactivatedByKueue = &value.Workloads.AfterDeactivatedByKueue.Duration
 		}
+		if value != nil && value.Jobs != nil && value.Jobs.AfterFinished != nil {
+			o.JobRetentionPolicy.AfterFinished = &value.Jobs.AfterFinished.Duration
+		}
 	}
 }
 
@@ -357,6 +366,7 @@ func NewReconciler(
 		annotationsToCopy:            options.AnnotationsToCopy,
 		clock:                        options.Clock,
 		workloadRetentionPolicy:      options.WorkloadRetentionPolicy,
+		jobRetentionPolicy:           options.JobRetentionPolicy,
 		roleTracker:                  options.RoleTracker,
 		customLabels:                 options.CustomLabels,
 	}
@@ -513,7 +523,13 @@ func (r *JobReconciler) ReconcileGenericJob(ctx context.Context, req ctrl.Reques
 
 		r.record.Eventf(object, nil, corev1.EventTypeNormal, ReasonFinishedWorkload, "FinishedWorkload",
 			"Workload '%s' is declared finished", workload.Key(wl))
-		return ctrl.Result{}, workload.RemoveFinalizer(ctx, r.client, wl)
+
+		if err := workload.RemoveFinalizer(ctx, r.client, wl); err != nil {
+			return ctrl.Result{}, err
+		}
+
+		requeueAfter, err := r.handleOwnerAfterFinishedPolicy(ctx, object)
+		return ctrl.Result{RequeueAfter: requeueAfter}, err
 	}
 
 	// 1.1 If the workload is pending deletion, suspend the job if needed
@@ -575,7 +591,8 @@ func (r *JobReconciler) ReconcileGenericJob(ctx context.Context, req ctrl.Reques
 			return ctrl.Result{}, err
 		}
 
-		return ctrl.Result{}, nil
+		requeueAfter, err := r.handleOwnerAfterFinishedPolicy(ctx, object)
+		return ctrl.Result{RequeueAfter: requeueAfter}, err
 	}
 
 	// 3. handle workload is nil.
@@ -926,6 +943,46 @@ func (r *JobReconciler) handleWorkloadAfterDeactivatedPolicy(ctx context.Context
 
 	log.V(3).Info("Requeuing job for deletion", "requeueAfter", requeueAfter)
 	return requeueAfter, nil
+}
+
+func (r *JobReconciler) shouldHandleDeletionOfFinishedOwner(object client.Object) bool {
+	if r.jobRetentionPolicy.AfterFinished == nil {
+		return false
+	}
+	if !object.GetDeletionTimestamp().IsZero() {
+		return false
+	}
+	_, exists := object.GetAnnotations()[controllerconsts.WorkloadFinishedAtAnnotation]
+	return exists
+}
+
+func (r *JobReconciler) handleOwnerAfterFinishedPolicy(ctx context.Context, object client.Object) (time.Duration, error) {
+	if !r.shouldHandleDeletionOfFinishedOwner(object) {
+		return 0, nil
+	}
+
+	log := ctrl.LoggerFrom(ctx)
+	stamped, err := time.Parse(time.RFC3339, object.GetAnnotations()[controllerconsts.WorkloadFinishedAtAnnotation])
+	if err != nil {
+		log.V(2).Info("Ignoring owner with an unparseable finish timestamp", "err", err)
+		return 0, nil
+	}
+
+	requeueAfter := stamped.Add(*r.jobRetentionPolicy.AfterFinished).Sub(r.clock.Now())
+	if requeueAfter > 0 {
+		return requeueAfter, nil
+	}
+
+	uid := object.GetUID()
+	if err := r.client.Delete(ctx, object,
+		client.PropagationPolicy(metav1.DeletePropagationBackground),
+		client.Preconditions{UID: &uid},
+	); err != nil {
+		return 0, client.IgnoreNotFound(err)
+	}
+	r.record.Eventf(object, nil, corev1.EventTypeNormal, ReasonDeleted, "Deleted",
+		"Deleted job: owner retention period expired")
+	return 0, nil
 }
 
 func (r *JobReconciler) recordAdmissionCheckUpdate(wl *kueue.Workload, job GenericJob) {
@@ -2001,7 +2058,6 @@ func (r *JobReconciler) recordFinishedAt(
 		return true, nil
 	}, clientutil.WithRetryOnConflict())
 
-	fmt.Printf("AFTER %v err=%v\n", object.GetAnnotations(), err)
 	return err
 }
 
