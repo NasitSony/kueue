@@ -77,6 +77,7 @@ var (
 	dynamicResourceAllocationPath         = field.NewPath("resources", "deviceClassMappings")
 	objectRetentionPoliciesPath           = field.NewPath("objectRetentionPolicies")
 	objectRetentionPoliciesWorkloadsPath  = objectRetentionPoliciesPath.Child("workloads")
+	objectRetentionPoliciesJobsPath       = objectRetentionPoliciesPath.Child("jobs")
 	tlsPath                               = field.NewPath("tls")
 	featureGatesPath                      = field.NewPath("featureGates")
 	visibilityServerBindAddressPath       = field.NewPath("visibilityServer", "bindAddress")
@@ -721,16 +722,22 @@ func LoadAndValidateFeatureGates(featureGateCLI string, featureGateMap map[strin
 func validateObjectRetentionPolicies(c *configapi.Configuration) field.ErrorList {
 	var allErrs field.ErrorList
 	rr := c.ObjectRetentionPolicies
-	if rr == nil || rr.Workloads == nil {
+	if rr == nil {
 		return allErrs
 	}
-	if rr.Workloads.AfterFinished != nil && rr.Workloads.AfterFinished.Duration < 0 {
-		allErrs = append(allErrs, field.Invalid(objectRetentionPoliciesWorkloadsPath.Child("afterFinished"),
-			c.ObjectRetentionPolicies.Workloads.AfterFinished, apimachineryvalidation.IsNegativeErrorMsg))
+	if rr.Workloads != nil {
+		if rr.Workloads.AfterFinished != nil && rr.Workloads.AfterFinished.Duration < 0 {
+			allErrs = append(allErrs, field.Invalid(objectRetentionPoliciesWorkloadsPath.Child("afterFinished"),
+				rr.Workloads.AfterFinished, apimachineryvalidation.IsNegativeErrorMsg))
+		}
+		if rr.Workloads.AfterDeactivatedByKueue != nil && rr.Workloads.AfterDeactivatedByKueue.Duration < 0 {
+			allErrs = append(allErrs, field.Invalid(objectRetentionPoliciesWorkloadsPath.Child("afterDeactivatedByKueue"),
+				rr.Workloads.AfterDeactivatedByKueue.Duration.String(), apimachineryvalidation.IsNegativeErrorMsg))
+		}
 	}
-	if rr.Workloads.AfterDeactivatedByKueue != nil && rr.Workloads.AfterDeactivatedByKueue.Duration < 0 {
-		allErrs = append(allErrs, field.Invalid(objectRetentionPoliciesWorkloadsPath.Child("afterDeactivatedByKueue"),
-			c.ObjectRetentionPolicies.Workloads.AfterDeactivatedByKueue.Duration.String(), apimachineryvalidation.IsNegativeErrorMsg))
+	if rr.Jobs != nil && rr.Jobs.AfterFinished != nil && rr.Jobs.AfterFinished.Duration < 0 {
+		allErrs = append(allErrs, field.Invalid(objectRetentionPoliciesJobsPath.Child("afterFinished"),
+			rr.Jobs.AfterFinished, apimachineryvalidation.IsNegativeErrorMsg))
 	}
 	return allErrs
 }

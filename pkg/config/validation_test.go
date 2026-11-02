@@ -1641,6 +1641,48 @@ func TestValidate(t *testing.T) {
 				},
 			},
 		},
+		"negative afterFinished in .objectRetentionPolicies.jobs": {
+			cfg: &configapi.Configuration{
+				Integrations: defaultIntegrations,
+				ObjectRetentionPolicies: &configapi.ObjectRetentionPolicies{
+					Jobs: &configapi.JobRetentionPolicy{
+						AfterFinished: new(metav1.Duration{Duration: -1}),
+					},
+				},
+			},
+			wantErr: field.ErrorList{
+				&field.Error{
+					Type:  field.ErrorTypeInvalid,
+					Field: "objectRetentionPolicies.jobs.afterFinished",
+				},
+			},
+		},
+		"zero afterFinished in .objectRetentionPolicies.jobs": {
+			cfg: &configapi.Configuration{
+				Integrations: defaultIntegrations,
+				ObjectRetentionPolicies: &configapi.ObjectRetentionPolicies{
+					Jobs: &configapi.JobRetentionPolicy{
+						AfterFinished: new(metav1.Duration{Duration: 0}),
+					},
+				},
+			},
+		},
+		"negative afterFinished in .objectRetentionPolicies.jobs with workloads unset": {
+			cfg: &configapi.Configuration{
+				Integrations: defaultIntegrations,
+				ObjectRetentionPolicies: &configapi.ObjectRetentionPolicies{
+					Jobs: &configapi.JobRetentionPolicy{
+						AfterFinished: new(metav1.Duration{Duration: -1}),
+					},
+				},
+			},
+			wantErr: field.ErrorList{
+				&field.Error{
+					Type:  field.ErrorTypeInvalid,
+					Field: "objectRetentionPolicies.jobs.afterFinished",
+				},
+			},
+		},
 		"valid TLS with TLS 1.2 and cipher suites": {
 			cfg: &configapi.Configuration{
 				Integrations: defaultIntegrations,

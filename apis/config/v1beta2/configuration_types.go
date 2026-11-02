@@ -866,6 +866,11 @@ type ObjectRetentionPolicies struct {
 	// A nil value disables automatic deletion of Workloads.
 	// +optional
 	Workloads *WorkloadRetentionPolicy `json:"workloads,omitempty"`
+	// Jobs configures retention for the Job-like objects (e.g. batch/Job,
+	// JobSet) that own Kueue-managed Workloads.
+	// A nil value disables automatic deletion of Job owners.
+	// +optional
+	Jobs *JobRetentionPolicy `json:"jobs,omitempty"`
 }
 
 // WorkloadRetentionPolicy defines the policies for when Workloads should be deleted.
@@ -889,6 +894,18 @@ type WorkloadRetentionPolicy struct {
 	// Represented using metav1.Duration (e.g. "10m", "1h30m").
 	// +optional
 	AfterDeactivatedByKueue *metav1.Duration `json:"afterDeactivatedByKueue,omitempty"`
+}
+
+// JobRetentionPolicy defines the policy for when a Job owner should be deleted
+// after its Workload has finished.
+type JobRetentionPolicy struct {
+	// AfterFinished is the duration to wait after the owning Workload
+	// finishes before deleting the Job.
+	// A duration of 0 will delete immediately.
+	// A nil value disables automatic deletion.
+	// Represented using metav1.Duration (e.g. "10m", "1h30m").
+	// +optional
+	AfterFinished *metav1.Duration `json:"afterFinished,omitempty"`
 }
 
 type VisibilityServerConfiguration struct {

@@ -1076,6 +1076,37 @@ Defaults to kueue-webhook-server-cert.</p>
 </tbody>
 </table>
 
+## `JobRetentionPolicy`     {#config-kueue-x-k8s-io-v1beta2-JobRetentionPolicy}
+    
+
+**Appears in:**
+
+- [ObjectRetentionPolicies](#config-kueue-x-k8s-io-v1beta2-ObjectRetentionPolicies)
+
+
+<p>JobRetentionPolicy defines the policy for when a Job owner should be deleted
+after its Workload has finished.</p>
+
+
+<table class="table">
+<thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
+<tbody>
+    
+  
+<tr><td><code>afterFinished</code><br/>
+<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.28/#duration-v1-meta"><code>k8s.io/apimachinery/pkg/apis/meta/v1.Duration</code></a>
+</td>
+<td>
+   <p>AfterFinished is the duration to wait after the owning Workload
+finishes before deleting the Job.
+A duration of 0 will delete immediately.
+A nil value disables automatic deletion.
+Represented using metav1.Duration (e.g. &quot;10m&quot;, &quot;1h30m&quot;).</p>
+</td>
+</tr>
+</tbody>
+</table>
+
 ## `LocalQueueMetrics`     {#config-kueue-x-k8s-io-v1beta2-LocalQueueMetrics}
     
 
@@ -1255,6 +1286,15 @@ the expected format is <code>kind.version.group</code>.</p>
 <td>
    <p>Workloads configures retention for Workloads.
 A nil value disables automatic deletion of Workloads.</p>
+</td>
+</tr>
+<tr><td><code>jobs</code><br/>
+<a href="#config-kueue-x-k8s-io-v1beta2-JobRetentionPolicy"><code>JobRetentionPolicy</code></a>
+</td>
+<td>
+   <p>Jobs configures retention for the Job-like objects (e.g. batch/Job,
+JobSet) that own Kueue-managed Workloads.
+A nil value disables automatic deletion of Job owners.</p>
 </td>
 </tr>
 </tbody>
