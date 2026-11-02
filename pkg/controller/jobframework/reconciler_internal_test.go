@@ -293,11 +293,12 @@ func TestHandleOwnerAfterFinishedPolicy(t *testing.T) {
 	}
 
 	cases := map[string]struct {
-		jobAnnotations map[string]string
-		retention      *configapi.ObjectRetentionPolicies
-		wantDeleted    bool
-		wantRequeue    time.Duration
-		gateEnabled    bool
+		jobAnnotations   map[string]string
+		retention        *configapi.ObjectRetentionPolicies
+		wantDeleted      bool
+		wantRequeue      time.Duration
+		gateEnabled      bool
+		workloadFinished *bool
 	}{
 		"deletes the owner once the retention period has elapsed": {
 			jobAnnotations: stamp,
@@ -326,6 +327,19 @@ func TestHandleOwnerAfterFinishedPolicy(t *testing.T) {
 			retention:      oneHour,
 			gateEnabled:    false,
 		},
+		"ignores a stamp while the workload is still unfinished": {
+			jobAnnotations:   stamp,
+			retention:        oneHour,
+			gateEnabled:      true,
+			workloadFinished: new(false),
+		},
+		"ignores a finish timestamp in the future": {
+			jobAnnotations: map[string]string{
+				controllerconsts.WorkloadFinishedAtAnnotation: now.Add(time.Hour).Format(time.RFC3339),
+			},
+			retention:   oneHour,
+			gateEnabled: true,
+		},
 	}
 
 	for name, tc := range cases {
@@ -349,7 +363,19 @@ func TestHandleOwnerAfterFinishedPolicy(t *testing.T) {
 				WithClock(testingclock.NewFakeClock(now)),
 			)
 
-			gotRequeue, err := reconciler.handleOwnerAfterFinishedPolicy(ctx, job)
+			var wl *kueue.Workload
+			if tc.workloadFinished != nil {
+				wl = utiltestingapi.MakeWorkload("wl", "default").Obj()
+				if *tc.workloadFinished {
+					apimeta.SetStatusCondition(&wl.Status.Conditions, metav1.Condition{
+						Type:   kueue.WorkloadFinished,
+						Status: metav1.ConditionTrue,
+						Reason: kueue.WorkloadFinishedReasonSucceeded,
+					})
+				}
+			}
+
+			gotRequeue, err := reconciler.handleOwnerAfterFinishedPolicy(ctx, job, wl)
 			if err != nil {
 				t.Fatalf("handleOwnerAfterFinishedPolicy: %v", err)
 			}

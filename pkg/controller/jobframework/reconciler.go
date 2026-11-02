@@ -528,7 +528,7 @@ func (r *JobReconciler) ReconcileGenericJob(ctx context.Context, req ctrl.Reques
 			return ctrl.Result{}, err
 		}
 
-		requeueAfter, err := r.handleOwnerAfterFinishedPolicy(ctx, object)
+		requeueAfter, err := r.handleOwnerAfterFinishedPolicy(ctx, object, wl)
 		return ctrl.Result{RequeueAfter: requeueAfter}, err
 	}
 
@@ -591,7 +591,7 @@ func (r *JobReconciler) ReconcileGenericJob(ctx context.Context, req ctrl.Reques
 			return ctrl.Result{}, err
 		}
 
-		requeueAfter, err := r.handleOwnerAfterFinishedPolicy(ctx, object)
+		requeueAfter, err := r.handleOwnerAfterFinishedPolicy(ctx, object, wl)
 		return ctrl.Result{RequeueAfter: requeueAfter}, err
 	}
 
@@ -959,8 +959,15 @@ func (r *JobReconciler) shouldHandleDeletionOfFinishedOwner(object client.Object
 	return exists
 }
 
-func (r *JobReconciler) handleOwnerAfterFinishedPolicy(ctx context.Context, object client.Object) (time.Duration, error) {
+func (r *JobReconciler) handleOwnerAfterFinishedPolicy(ctx context.Context, object client.Object, wl *kueue.Workload) (time.Duration, error) {
 	if !r.shouldHandleDeletionOfFinishedOwner(object) {
+		return 0, nil
+	}
+
+	// The annotation lives on a user-editable object. While the Workload still
+	// exists it is the authority on whether the work finished, so a stamp that
+	// disagrees with it is ignored.
+	if wl != nil && !workloadfinish.IsFinished(wl) {
 		return 0, nil
 	}
 
@@ -968,6 +975,10 @@ func (r *JobReconciler) handleOwnerAfterFinishedPolicy(ctx context.Context, obje
 	stamped, err := time.Parse(time.RFC3339, object.GetAnnotations()[controllerconsts.WorkloadFinishedAtAnnotation])
 	if err != nil {
 		log.V(2).Info("Ignoring owner with an unparseable finish timestamp", "err", err)
+		return 0, nil
+	}
+	if stamped.After(r.clock.Now()) {
+		log.V(2).Info("Ignoring owner with a finish timestamp in the future", "stamped", stamped)
 		return 0, nil
 	}
 
