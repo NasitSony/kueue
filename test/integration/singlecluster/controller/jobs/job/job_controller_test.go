@@ -4994,6 +4994,7 @@ var _ = ginkgo.Describe("Job controller with ObjectRetentionPolicies", ginkgo.Or
 		enableWaitForPodsReady  bool
 		afterDeactivatedByKueue *metav1.Duration
 		afterFinished           *metav1.Duration
+		jobsAfterFinished       *metav1.Duration
 
 		ns *corev1.Namespace
 		fl *kueue.ResourceFlavor
@@ -5021,6 +5022,9 @@ var _ = ginkgo.Describe("Job controller with ObjectRetentionPolicies", ginkgo.Or
 				Workloads: &configapi.WorkloadRetentionPolicy{
 					AfterDeactivatedByKueue: afterDeactivatedByKueue,
 					AfterFinished:           afterFinished,
+				},
+				Jobs: &configapi.JobRetentionPolicy{
+					AfterFinished: jobsAfterFinished,
 				},
 			},
 			WaitForPodsReady: waitForPodsReady,
@@ -5054,6 +5058,7 @@ var _ = ginkgo.Describe("Job controller with ObjectRetentionPolicies", ginkgo.Or
 
 		afterDeactivatedByKueue = nil
 		afterFinished = nil
+		jobsAfterFinished = nil
 	})
 
 	ginkgo.When("WaitForPodsReady disabled", func() {
@@ -5105,6 +5110,70 @@ var _ = ginkgo.Describe("Job controller with ObjectRetentionPolicies", ginkgo.Or
 						g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(job), createdJob)).Should(gomega.Succeed())
 						g.Expect(createdJob.GetDeletionTimestamp()).To(gomega.BeNil())
 					}, behavioral.Timeout, behavioral.Interval).Should(gomega.Succeed())
+				})
+			})
+		})
+
+		ginkgo.When("tiny owner retention period", func() {
+			ginkgo.BeforeEach(func() {
+				features.SetFeatureGateDuringTest(ginkgo.GinkgoTB(), features.JobOwnerRetentionPolicy, true)
+				jobsAfterFinished = &metav1.Duration{Duration: behavioral.TinyTimeout}
+			})
+
+			ginkgo.It("should delete the Job after its Workload finishes", func() {
+				job := testingjob.MakeJob("job", ns.Name).
+					Queue(kueue.LocalQueueName(lq.Name)).
+					Obj()
+				behavioral.MustCreate(ctx, k8sClient, job)
+
+				wlKey := types.NamespacedName{
+					Name:      workloadjob.GetWorkloadNameForJob(job.Name, job.UID),
+					Namespace: ns.Name,
+				}
+				wl := &kueue.Workload{}
+
+				ginkgo.By("Waiting for the Workload to be created", func() {
+					gomega.Eventually(func(g gomega.Gomega) {
+						g.Expect(k8sClient.Get(ctx, wlKey, wl)).To(gomega.Succeed())
+					}, behavioral.Timeout, behavioral.Interval).Should(gomega.Succeed())
+				})
+
+				ginkgo.By("Admitting the Workload", func() {
+					admission := utiltestingapi.MakeAdmission(kueue.ClusterQueueReference(cq.Name)).
+						PodSets(utiltestingapi.MakePodSetAssignment(kueue.DefaultPodSetName).
+							Assignment(corev1.ResourceCPU, kueue.ResourceFlavorReference(fl.Name), "1m").
+							Count(wl.Spec.PodSets[0].Count).
+							Obj()).
+						Obj()
+					integration.SetQuotaReservation(ctx, k8sClient, wlKey, admission)
+					integration.SyncAdmittedConditionForWorkloads(ctx, k8sClient, wl)
+				})
+
+				ginkgo.By("Finishing the Job", func() {
+					gomega.Eventually(func(g gomega.Gomega) {
+						createdJob := &batchv1.Job{}
+						g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(job), createdJob)).To(gomega.Succeed())
+						now := metav1.Now()
+						createdJob.Status.StartTime = &now
+						createdJob.Status.CompletionTime = &now
+						createdJob.Status.Conditions = append(createdJob.Status.Conditions,
+							batchv1.JobCondition{
+								Type:               batchv1.JobSuccessCriteriaMet,
+								Status:             corev1.ConditionTrue,
+								LastTransitionTime: now,
+							},
+							batchv1.JobCondition{
+								Type:               batchv1.JobComplete,
+								Status:             corev1.ConditionTrue,
+								LastTransitionTime: now,
+							},
+						)
+						g.Expect(k8sClient.Status().Update(ctx, createdJob)).To(gomega.Succeed())
+					}, behavioral.Timeout, behavioral.Interval).Should(gomega.Succeed())
+				})
+
+				ginkgo.By("Checking that the Job is deleted", func() {
+					behavioral.ExpectObjectToBeDeleted(ctx, k8sClient, job, false)
 				})
 			})
 		})
