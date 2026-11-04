@@ -5176,6 +5176,56 @@ var _ = ginkgo.Describe("Job controller with ObjectRetentionPolicies", ginkgo.Or
 					behavioral.ExpectObjectToBeDeleted(ctx, k8sClient, job, false)
 				})
 			})
+
+			ginkgo.It("should not delete the Job when the Workload finished as a replaced slice", func() {
+				job := testingjob.MakeJob("job", ns.Name).
+					Queue(kueue.LocalQueueName(lq.Name)).
+					Obj()
+				behavioral.MustCreate(ctx, k8sClient, job)
+
+				wlKey := types.NamespacedName{
+					Name:      workloadjob.GetWorkloadNameForJob(job.Name, job.UID),
+					Namespace: ns.Name,
+				}
+				wl := &kueue.Workload{}
+
+				ginkgo.By("Waiting for the Workload to be created", func() {
+					gomega.Eventually(func(g gomega.Gomega) {
+						g.Expect(k8sClient.Get(ctx, wlKey, wl)).To(gomega.Succeed())
+					}, behavioral.Timeout, behavioral.Interval).Should(gomega.Succeed())
+				})
+
+				ginkgo.By("Admitting the Workload", func() {
+					admission := utiltestingapi.MakeAdmission(kueue.ClusterQueueReference(cq.Name)).
+						PodSets(utiltestingapi.MakePodSetAssignment(kueue.DefaultPodSetName).
+							Assignment(corev1.ResourceCPU, kueue.ResourceFlavorReference(fl.Name), "1m").
+							Count(wl.Spec.PodSets[0].Count).
+							Obj()).
+						Obj()
+					integration.SetQuotaReservation(ctx, k8sClient, wlKey, admission)
+					integration.SyncAdmittedConditionForWorkloads(ctx, k8sClient, wl)
+				})
+
+				ginkgo.By("Finishing the Workload as a replaced slice", func() {
+					gomega.Eventually(func(g gomega.Gomega) {
+						g.Expect(k8sClient.Get(ctx, wlKey, wl)).To(gomega.Succeed())
+						apimeta.SetStatusCondition(&wl.Status.Conditions, metav1.Condition{
+							Type:    kueue.WorkloadFinished,
+							Status:  metav1.ConditionTrue,
+							Reason:  kueue.WorkloadSliceReplaced,
+							Message: "Replaced to accommodate a new workload slice",
+						})
+						g.Expect(k8sClient.Status().Update(ctx, wl)).To(gomega.Succeed())
+					}, behavioral.Timeout, behavioral.Interval).Should(gomega.Succeed())
+				})
+
+				ginkgo.By("Checking that the Job is not deleted", func() {
+					createdJob := &batchv1.Job{}
+					gomega.Consistently(func(g gomega.Gomega) {
+						g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(job), createdJob)).To(gomega.Succeed())
+					}, behavioral.LongConsistentDuration, behavioral.Interval).Should(gomega.Succeed())
+				})
+			})
 		})
 
 		ginkgo.When("tiny finish retention period", func() {
